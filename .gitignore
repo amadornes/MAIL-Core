@@ -1,0 +1,16 @@
+# Gradle
+build
+.gradle
+
+# IntelliJ
+.idea
+*.iws
+*.iml
+*.ipr
+out
+
+# Compiled class file
+*.class
+
+# Log file
+*.log
