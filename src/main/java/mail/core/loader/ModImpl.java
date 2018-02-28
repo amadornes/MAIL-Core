@@ -31,7 +31,7 @@ public class ModImpl implements Mod {
 
     @Override
     public String toString() {
-        return "Mod(modid=\"" + modid + "\", name=\"" + name + "\", version=\"" + version + "\")";
+        return String.format("Mod(modid=\"%s\", name=\"%s\", version=\"%s\")", modid, name, version);
     }
 
 }

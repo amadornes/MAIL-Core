@@ -85,7 +85,7 @@ public enum DefaultModProvider implements ModProvider<DefaultModProvider.Prototy
 
         @Override
         public String toString() {
-            return "DefaultModPrototype(modid=\"" + modid + "\")";
+            return String.format("DefaultModPrototype(modid=\"%s\")", modid);
         }
     }
 

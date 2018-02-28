@@ -83,7 +83,7 @@ public enum LoaderImpl implements Loader {
         if (file.getName().toLowerCase().endsWith(".jar")) {
             try (ZipFile jar = new ZipFile(file)) {
                 ZipEntry metaFile = jar.getEntry(METADATA_FILE_NAME);
-                if (metaFile == null) return; // Missing meta file - ignoring!
+                if (metaFile == null) return; // Missing meta file - ignoring! TODO: Log warning
 
                 fileSystem = FileSystems.newFileSystem(URI.create("jar:" + path.toUri().toString()), Collections.emptyMap());
                 fileSystemRoot = fileSystem.getPath("/");
