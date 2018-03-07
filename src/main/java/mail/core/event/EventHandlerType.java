@@ -5,12 +5,15 @@ import mail.api.annotations.ServerOnly;
 import mail.api.event.Event;
 import mail.api.event.EventPhase;
 import mail.api.game.Environment;
+import mail.movetolib.util.AnnotationHelper;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Map;
@@ -45,8 +48,14 @@ final class EventHandlerType {
         for (Method method : type.getMethods()) {
             if (Modifier.isStatic(method.getModifiers()) != isStatic) continue;
 
-            Event.Subscribe annotation = method.getAnnotation(Event.Subscribe.class);
+            Event.Subscribe annotation = AnnotationHelper.getAnnotation(method, Event.Subscribe.class);
             if (annotation == null) continue;
+
+            if (annotation.deferred()) {
+                // Check direct annotation instead of inherited
+                Event.Subscribe eventAnnotation = method.getAnnotation(Event.Subscribe.class);
+                if (eventAnnotation != null && eventAnnotation.deferred()) continue;
+            }
 
             Class<?>[] parameters = method.getParameterTypes();
             if (parameters.length == 0) {
@@ -64,11 +73,6 @@ final class EventHandlerType {
                         + "Offender: " + method.getDeclaringClass().getName() + "#" + method.getName());
             }
 
-            if (!method.getReturnType().equals(Void.TYPE) && !Event.WithResult.class.isAssignableFrom(type)) {
-                throw new IllegalStateException("No value can be returned for an event without a result."
-                        + "Offender: " + method.getDeclaringClass().getName() + "#" + method.getName());
-            }
-
             EventType eventType = EventType.of((Class<? extends Event>) firstArg);
             EventHandler handler = new EventHandler(eventType, method, annotation);
             handlers.add(handler);
@@ -82,22 +86,27 @@ final class EventHandlerType {
     static final class EventHandler {
 
         private final EventType eventType;
+        private final boolean isStatic;
+        private final boolean returnsValue;
 
         private final EventPhase phase;
         private final boolean receiveCanceled;
         private final Environment.Side side;
+        private final Type[] generics;
 
         private final EventType.Property[] properties;
         private final MethodHandle handle;
 
         private EventHandler(EventType eventType, Method method, Event.Subscribe annotation) {
             this.eventType = eventType;
+            this.isStatic = Modifier.isStatic(method.getModifiers());
+            this.returnsValue = method.getReturnType() != Void.TYPE;
 
             this.phase = annotation.phase();
             this.receiveCanceled = annotation.receiveCanceled();
 
-            ClientOnly clientOnly = method.getAnnotation(ClientOnly.class);
-            ServerOnly serverOnly = method.getAnnotation(ServerOnly.class);
+            ClientOnly clientOnly = AnnotationHelper.getAnnotation(method, ClientOnly.class);
+            ServerOnly serverOnly = AnnotationHelper.getAnnotation(method, ServerOnly.class);
             if (clientOnly != null && serverOnly != null) {
                 throw new IllegalStateException("A event handler cannot be both client-only and server only. "
                         + "Offender: " + method.getDeclaringClass().getName() + "#" + method.getName());
@@ -110,6 +119,13 @@ final class EventHandlerType {
                 this.side = null;
             }
 
+            Type eventParam = method.getGenericParameterTypes()[0];
+            if (eventParam instanceof ParameterizedType) {
+                this.generics = ((ParameterizedType) eventParam).getActualTypeArguments();
+            } else {
+                this.generics = new Type[0];
+            }
+
             this.properties = new EventType.Property[method.getParameterCount() - 1];
 
             Parameter[] parameters = method.getParameters();
@@ -117,7 +133,7 @@ final class EventHandlerType {
             for (int i = 1; i < parameters.length; i++) {
                 Parameter parameter = parameters[i];
 
-                Event.Result result = parameter.getAnnotation(Event.Result.class);
+                Event.Result result = AnnotationHelper.getAnnotation(parameter, Event.Result.class);
                 if (result != null) {
                     if (resultParam == -1) {
                         resultParam = i;
@@ -130,7 +146,7 @@ final class EventHandlerType {
                     continue;
                 }
 
-                Event.Unpack unpack = parameter.getAnnotation(Event.Unpack.class);
+                Event.Unpack unpack = AnnotationHelper.getAnnotation(parameter, Event.Unpack.class);
                 if (unpack == null) {
                     throw new IllegalStateException("An extra argument of an event subscriber must be annotated with @Event.Unpack or @Event.Result. "
                             + "Offender: " + method.getDeclaringClass().getName() + "#" + method.getName() + " (" + (i + 1) + ")");
@@ -145,18 +161,22 @@ final class EventHandlerType {
                 this.properties[i - 1] = property;
             }
 
-            if (resultParam != -1 && !eventType.hasResult()) {
+            if (resultParam != -1 && !eventType.hasResult() && phase != EventPhase.CANCELLATION) {
                 throw new IllegalStateException("No result value can be retrieved for an event without a result."
                         + "Offender: " + method.getDeclaringClass().getName() + "#" + method.getName());
             }
 
             if (phase == EventPhase.CANCELLATION) {
-                if (resultParam == -1 || !parameters[resultParam].getType().equals(Boolean.TYPE) || !method.getReturnType().equals(Boolean.TYPE)) {
+                if (resultParam == -1 || parameters[resultParam].getType() != Boolean.TYPE || method.getReturnType() != Boolean.TYPE) {
                     throw new IllegalStateException("Event cancellation handlers must take in and output a boolean with the result of the cancellation. "
                             + "Offender: " + method.getDeclaringClass().getName() + "#" + method.getName());
                 }
-            } else if (resultParam != -1) {
-                if (parameters[resultParam].getType() != method.getReturnType()) {
+            } else {
+                Class<?> returnType = method.getReturnType();
+                if ((returnType == Void.TYPE) != (resultParam == -1)) {
+                    throw new IllegalStateException("Event handlers that deal with results must both take in the previous value and return one."
+                            + "Offender: " + method.getDeclaringClass().getName() + "#" + method.getName());
+                } else if (resultParam != -1 && parameters[resultParam].getType() != returnType) {
                     throw new IllegalStateException("The return type and input of an event handler must match."
                             + "Offender: " + method.getDeclaringClass().getName() + "#" + method.getName());
                 }
@@ -183,30 +203,44 @@ final class EventHandlerType {
             if (canceled && !receiveCanceled) return prevResult;
             if (side != null && event instanceof Event.SideAware && ((Event.SideAware) event).getEventSide() != side)
                 return prevResult;
+            if (event instanceof Event.Generic) {
+                for (int i = 0; i < generics.length; i++) {
+                    Class<?> generic = (Class) generics[i];
+                    if (generic != null && !((Event.Generic) event).matchesGenericType((Class<? extends Event.Generic>) eventType.getClazz(), i, generic)) {
+                        return prevResult;
+                    }
+                }
+            }
 
-            Object[] arguments = new Object[properties.length + 2];
-            arguments[0] = target;
-            arguments[1] = event;
+            int offset = isStatic ? 1 : 2;
+            Object[] arguments = new Object[properties.length + offset];
+            if (isStatic) {
+                arguments[0] = event;
+            } else {
+                arguments[0] = target;
+                arguments[1] = event;
+            }
             for (int i = 0; i < properties.length; i++) {
                 EventType.Property property = properties[i];
                 if (property != null) {
                     if (property.isMutable()) {
-                        arguments[i + 2] = property.get(event);
+                        arguments[i + offset] = property.get(event);
                     } else {
                         if (propertyMap.containsKey(property)) {
-                            arguments[i + 2] = propertyMap.get(property);
+                            arguments[i + offset] = propertyMap.get(property);
                         } else {
                             Object value = property.get(event);
-                            arguments[i + 2] = value;
+                            arguments[i + offset] = value;
                             propertyMap.put(property, value);
                         }
                     }
                 } else {
-                    arguments[i + 2] = prevResult;
+                    arguments[i + offset] = prevResult;
                 }
             }
 
-            return handle.invokeWithArguments(arguments);
+            Object result = handle.invokeWithArguments(arguments);
+            return returnsValue ? result : prevResult;
         }
 
     }

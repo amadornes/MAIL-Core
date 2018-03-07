@@ -1,6 +1,7 @@
 package mail.core.event;
 
 import mail.api.event.Event;
+import mail.movetolib.util.AnnotationHelper;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -35,7 +36,7 @@ final class EventType {
         for (Method method : type.getMethods()) {
             if (Modifier.isStatic(method.getModifiers())) continue;
 
-            Event.Property annotation = method.getAnnotation(Event.Property.class);
+            Event.Property annotation = AnnotationHelper.getAnnotation(method, Event.Property.class);
             if (annotation == null) continue;
 
             if (method.getParameterCount() != 0) {
