@@ -1,2 +1,33 @@
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'org.junit.platform:junit-platform-gradle-plugin:1.1.0'
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
 apply plugin: 'java'
 apply plugin: 'idea'
+apply plugin: 'org.junit.platform.gradle.plugin'
+
+dependencies {
+    // JUnit Jupiter API and TestEngine implementation
+    testCompile("org.junit.jupiter:junit-jupiter-api:5.1.0")
+    testRuntime("org.junit.jupiter:junit-jupiter-engine:5.1.0")
+
+    // Log4J
+    testRuntime("org.apache.logging.log4j:log4j-core:2.9.0")
+    testRuntime("org.apache.logging.log4j:log4j-jul:2.9.0")
+
+    // Only needed to run tests in an (IntelliJ) IDE(A) that bundles an older version
+    testRuntime("org.junit.platform:junit-platform-launcher:1.1.0")
+}
+
+junitPlatform {
+    logManager 'org.apache.logging.log4j.jul.LogManager'
+}

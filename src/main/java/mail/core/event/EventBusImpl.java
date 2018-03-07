@@ -13,6 +13,7 @@ import java.util.Set;
 
 public class EventBusImpl implements EventBus {
 
+    private static final EventPhase[] ALL_PHASES = {EventPhase.CANCELLATION, EventPhase.PRE, EventPhase.DEFAULT, EventPhase.POST};
     private static final EventPhase[] MAIN_PHASES = {EventPhase.PRE, EventPhase.DEFAULT, EventPhase.POST};
 
     private final Map<EventType, EventDispatcher> dispatchers = new IdentityHashMap<>();
@@ -98,14 +99,14 @@ public class EventBusImpl implements EventBus {
     private void post(Event event, EventContext context) {
         Set<EventDispatcher> dispatchers = computeDispatchers(EventType.of(event.getClass()));
         try {
-            for (EventPhase phase : MAIN_PHASES) {
+            for (EventPhase phase : (event instanceof Event.Cancelable ? ALL_PHASES : MAIN_PHASES)) {
                 context.phase = phase;
                 for (EventDispatcher dispatcher : dispatchers) {
                     dispatcher.fire(event, context);
                 }
             }
         } catch (Throwable t) {
-            throw new IllegalStateException("There was an exception trying to fire an event.", t);
+            throw new IllegalStateException("There was an exception trying to post an event.", t);
         }
     }
 
@@ -182,13 +183,17 @@ public class EventBusImpl implements EventBus {
         }
 
         private void fire(EventPhase phase) {
+            if (!phase.canGoAfter(context.phase)) {
+                throw new IllegalStateException("Tried to transition event from " + context.phase + " to " + phase);
+            }
+
             context.phase = phase;
             try {
                 for (EventDispatcher dispatcher : dispatchers) {
                     dispatcher.fire(event, context);
                 }
             } catch (Throwable t) {
-                throw new IllegalStateException("There was an exception trying to fire an event.", t);
+                throw new IllegalStateException("There was an exception trying to post an event.", t);
             }
         }
 
@@ -198,6 +203,7 @@ public class EventBusImpl implements EventBus {
 
         private PostedEventWithResult(Event.WithResult<T> event) {
             super(event);
+            context.result = event.getDefaultResult();
         }
 
         @Override
@@ -237,11 +243,11 @@ public class EventBusImpl implements EventBus {
 
         private void fire(Event event, EventBusImpl.EventContext context) throws Throwable {
             for (Map.Entry<EventHandlerType.EventHandler, Set<Object>> entry : handlers.entrySet()) {
-                if(entry.getKey().getPhase() != context.phase) continue;
-                for (Object o : entry.getValue()) {
+                if (entry.getKey().getPhase() != context.phase) continue;
+                for (Object target : entry.getValue()) {
                     Object prevResult = context.phase == EventPhase.CANCELLATION ? context.canceled : context.result;
                     boolean canceled = context.phase != EventPhase.CANCELLATION && context.canceled;
-                    Object result = entry.getKey().fire(o, event, prevResult, canceled, context.propertyMap);
+                    Object result = entry.getKey().fire(target, event, prevResult, canceled, context.propertyMap);
                     if (context.phase == EventPhase.CANCELLATION) {
                         context.canceled = (boolean) result;
                     } else {
